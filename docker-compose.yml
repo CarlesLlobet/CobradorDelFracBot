@@ -1,0 +1,13 @@
+version: "3"
+
+services:
+  cobradordelfracbot:
+    container_name: cobradordelfracbot
+    restart: always
+    build:
+      context: "."
+    environment:
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+    
