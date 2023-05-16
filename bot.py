@@ -139,8 +139,7 @@ async def complete_setup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     current_jobs = context.job_queue.get_jobs_by_name(str(chat_id))
     for job in current_jobs: job.schedule_removal()
     
-    context.job_queue.run_daily(check_date, datetime.time(hour=10, minute=00, tzinfo=pytz.timezone('Europe/Madrid')), chat_id=chat_id, data=(reminder_date,annual_amount), name=str(chat_id))
-    context.job_queue.run_once(check_date, datetime.datetime.now(pytz.timezone('Europe/Madrid')), chat_id=chat_id, data=(reminder_date,annual_amount))  # Execute first time after setup
+    context.job_queue.run_daily(check_date, datetime.time(hour=8, minute=00, tzinfo=pytz.timezone('Europe/Madrid')), chat_id=chat_id, data=(reminder_date,annual_amount), name=str(chat_id))
 
     return ConversationHandler.END
 
