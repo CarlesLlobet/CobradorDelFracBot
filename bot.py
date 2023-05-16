@@ -1,13 +1,13 @@
 import os
 import logging
 import datetime
+import pytz
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     ApplicationBuilder, 
-    ContextTypes, 
     CommandHandler, 
+    ContextTypes,
     Updater, 
-    CallbackContext, 
     ConversationHandler, 
     CallbackQueryHandler, 
     MessageHandler,
@@ -20,6 +20,8 @@ filterwarnings(action="ignore", message=r".*CallbackQueryHandler", category=PTBU
 
 TOKEN = str(os.environ.get('TELEGRAM_TOKEN'))
 SETUP, CONFIGURING_DATE, CONFIGURING_AMOUNT = range(3)
+
+members = {}
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -75,14 +77,13 @@ async def setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return SETUP
 
-async def configure_option(update: Update, context: CallbackContext) -> None:
+async def configure_option(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     option = query.data
     await query.answer()
     
     if option == 'date':
         await query.message.reply_text("Por favor, selecciona la fecha en que se debe pagar anualmente:")
-        logging.info("DATE")
         return CONFIGURING_DATE
     elif option == 'amount':
         await query.message.reply_text("Por favor, envía la cantidad que se debe pagar anualmente:")
@@ -91,7 +92,7 @@ async def configure_option(update: Update, context: CallbackContext) -> None:
         await query.message.reply_text("Opción inválida. Por favor, intenta nuevamente.")
         return SETUP
 
-async def capture_date(update: Update, context: CallbackContext) -> None:
+async def capture_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_input = update.message.text
 
     try:
@@ -105,9 +106,9 @@ async def capture_date(update: Update, context: CallbackContext) -> None:
             await update.message.reply_text("Por favor, envía la cantidad que se debe pagar anualmente:")
             return CONFIGURING_AMOUNT  # Ask for the amount
     except ValueError:
-        await update.message.reply_text("Fecha inválida. Por favor, intenta nuevamente.")
+        await update.message.reply_text("Fecha inválida. Por favor, intenta nuevamente. (Formato: dd/mm)")
 
-async def capture_amount(update: Update, context: CallbackContext) -> None:    
+async def capture_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:    
     user_input = update.message.text    
     
     try:
@@ -123,7 +124,7 @@ async def capture_amount(update: Update, context: CallbackContext) -> None:
     except ValueError:
         await update.message.reply_text("Cantidad inválida. Por favor, intenta nuevamente.")
 
-async def complete_setup(update: Update, context: CallbackContext) -> None:
+async def complete_setup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     reminder_date = context.user_data['reminder_date']
     annual_amount = context.user_data['annual_amount']
 
@@ -133,18 +134,55 @@ async def complete_setup(update: Update, context: CallbackContext) -> None:
         f"por la siguiente cantidad: {annual_amount}€."
     )
 
+    chat_id = update.message.chat_id
+
+    current_jobs = context.job_queue.get_jobs_by_name(str(chat_id))
+    for job in current_jobs: job.schedule_removal()
+    
+    context.job_queue.run_daily(check_date, datetime.time(hour=10, minute=00, tzinfo=pytz.timezone('Europe/Madrid')), chat_id=chat_id, data=(reminder_date,annual_amount), name=str(chat_id))
+    context.job_queue.run_once(check_date, datetime.datetime.now(pytz.timezone('Europe/Madrid')), chat_id=chat_id, data=(reminder_date,annual_amount))  # Execute first time after setup
+
     return ConversationHandler.END
 
-async def daily_reminder(context: CallbackContext) -> None:
-    """TODO: Send a daily reminder about outstanding debts."""
-    # Fetch the outstanding debts for each member and send the reminders
+async def check_date(context: ContextTypes.DEFAULT_TYPE) -> None:
+    current_date = datetime.datetime.now(pytz.timezone('Europe/Madrid')).strftime("%d/%m")
+    reminder_date = context.job.data[0].strftime('%d/%m')
+    annual_amount = context.job.data[1]
+
+    if current_date == reminder_date:
+        global members
+        members = {558352770:'@mtona86', 54997365:'@kRowone', 328961319:'@mjubany', 27197845:'@Collinmcrae', 205924861:'@h4ng3r'}
+        await context.bot.send_message(chat_id=context.job.chat_id, text="Ha llegado el dia, morosos!")
+    
+
+    for member in members:
+        username = members[member]
+        
+        message = "["+username+"](tg://user?id="+str(member)+"): Debes "+str(int(annual_amount))+"€ a [@anxoveta](tg://user?id=47095626). Paga la coca, primer aviso"
+        await context.bot.send_message(chat_id=context.job.chat_id, text=message, parse_mode="Markdown")
 
 
-async def settle(update: Update, context: CallbackContext) -> None:
-    """TODO: Handle the /settle command to tag the user as debt-free."""
+async def settle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Mark the user as debt-free
+    userid = update.message.from_user['id']
+    username = update.message.from_user['username']
 
-async def cancel(update: Update, context: CallbackContext) -> None:
+    global members
+    if userid in members:
+        del members[userid]
+
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id, 
+            text="["+username+"](tg://user?id="+str(userid)+") ha sido liberado. Actualiza el [Excel](https://docs.google.com/spreadsheets/d/1y0SWXqF0I2mEOPvtsfjj23dDXEMh76g9JiihlNB7T_Q/edit?usp=drivesdk) Bitch!", 
+            parse_mode="Markdown")
+    else:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id, 
+            text="Tu no debias nada, parguela", 
+            parse_mode="Markdown")
+
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Configuración cancelada.")
     return ConversationHandler.END
 
