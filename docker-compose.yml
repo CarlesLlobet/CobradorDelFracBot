@@ -12,4 +12,5 @@ services:
       - TELEGRAM_CHATS=${TELEGRAM_CHATS:-[-366683659, -346416650]}
     volumes:
       - /etc/localtime:/etc/localtime:ro
+      - ./:/app
     

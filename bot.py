@@ -3,8 +3,11 @@ import logging
 import datetime
 import pytz
 import json
+import pickle
+from urllib.parse import quote
 from functools import wraps
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram_bot_calendar import DetailedTelegramCalendar, LSTEP
+from telegram import Update, KeyboardButton, WebAppInfo, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.constants import ChatAction
 from telegram.ext import (
     ApplicationBuilder, 
@@ -14,6 +17,7 @@ from telegram.ext import (
     ConversationHandler, 
     CallbackQueryHandler, 
     MessageHandler,
+    PicklePersistence,
     filters,
 )
 from warnings import filterwarnings
@@ -67,8 +71,6 @@ def send_typing_action(action):
     
     return decorator
 
-members = {}
-
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -87,6 +89,24 @@ async def start(update, context):
 @restricted
 @send_typing_action(ChatAction.TYPING)
 async def status(update, context):
+    try:
+        members=pickle.load(open("members.storage","rb"))
+    except (EOFError, FileNotFoundError) as e:
+        members = None
+
+    if members is not None:
+        if 'annual_amount' in context.user_data:
+            annual_amount = context.user_data['annual_amount']
+        else:
+            annual_amount = "0"
+        for member in members:
+            username = members[member]
+            
+            message = f"[@{username}](tg://user?id={str(member)}): Debe {str(annual_amount)}€ a [@anxoveta](tg://user?id=47095626)."
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=message, parse_mode="Markdown")
+    else:
+        await context.bot.send_message(chat_id=update.effective_chat.id, text="Nadie debe nada!", parse_mode="Markdown")
+
     if 'annual_amount' in context.user_data and 'reminder_date' in context.user_data:
         reminder_date = context.user_data['reminder_date']
         annual_amount = context.user_data['annual_amount']
@@ -96,10 +116,24 @@ async def status(update, context):
             text=f"El Cobrador del Frac vendrá a buscaros cada {reminder_date.strftime('%d/%m')} "
             f"por la siguiente cantidad: {annual_amount}€."
         )
+    elif 'annual_amount' in context.user_data:
+        annual_amount = context.user_data['annual_amount']
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id, 
+            text=f"El Cobrador del Frac debe cobrar {annual_amount}€, pero no sabe cuando deberia ir a buscarlos.\n"
+                f"Configura una fecha de recordatorio."
+        )
+    elif 'reminder_date' in context.user_data:
+        reminder_date = context.user_data['reminder_date']
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id, 
+            text=f"El Cobrador del Frac tiene que ir a buscaros cada {reminder_date.strftime('%d/%m')}, pero no sabe que cantidad reclamar.\n"
+            f"Configura una cantidad a reclamar."
+        )
     else:
         await context.bot.send_message(
             chat_id=update.effective_chat.id, 
-            text="El chat aun no ha sido configurado"
+            text="El chat aún no ha sido configurado!"
         )
 
 @restricted
@@ -109,9 +143,11 @@ async def help_command(update, context):
     	chat_id=update.effective_chat.id, 
     	text="Aquí tienes los comandos disponibles:\n\n"
         "/help - Lista todos los comandos disponibles y su significado\n"
+        "/status - Consulta las deudas pendientes y configuración actual\n"
+        "/settle - Una vez pagado, librate de mas insultos marcandote como pagado con este comando\n"
         "/setup - Configura el bot para empezar a recordar las deudas pendientes\n"
-        "/status - Consulta la configuración actual\n"
-        "/settle - Una vez pagado, librate de mas insultos marcandote como pagado con este comando"
+        "/cancel - Cancela la configuración en curso\n"
+        "/reset - Elimina cualquier configuración existente"
     )
 
 @restricted
@@ -122,14 +158,16 @@ async def setup(update, context):
         [
             InlineKeyboardButton("Enviar fecha", callback_data='date'),
             InlineKeyboardButton("Enviar cantidad", callback_data='amount')
-        ]
+        ],
+        [InlineKeyboardButton("Cancelar", callback_data='cancel')]
     ]
 
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
-        text="Vamos a empezar la configuración. Selecciona una opción:",
+        text="Panel de Configuración.\n\n Selecciona una opción:",
         reply_markup=InlineKeyboardMarkup(reply_keyboard)
     )
+
     return SETUP
 
 async def configure_option(update, context):
@@ -138,44 +176,58 @@ async def configure_option(update, context):
     await query.answer()
     
     if option == 'date':
-        await query.message.reply_text("Por favor, selecciona la fecha en que se debe pagar anualmente:")     
+        options = {
+            "range": False, 
+            "locale": "es", 
+            "dateFormat": "dd/MM"
+        }
+        url = f"https://tgdates.hoppingturtles.repl.co?options=" + quote(json.dumps(options))  # url encoded JSON string
+        but = KeyboardButton("Seleccionar fecha", web_app=WebAppInfo(url))
+        
+        await query.delete_message()
+        await context.bot.send_message(chat_id=query.message.chat.id, text="Por favor, selecciona la fecha en que se debe pagar anualmente:", reply_markup=ReplyKeyboardMarkup.from_button(but, one_time_keyboard=True))
+
         return CONFIGURING_DATE
     elif option == 'amount':
-        await query.message.reply_text("Por favor, envía la cantidad que se debe pagar anualmente:")
+        await query.edit_message_text(text="Por favor, envía la cantidad que se debe pagar anualmente:")
         return CONFIGURING_AMOUNT
+    elif option == 'cancel':
+        await query.edit_message_text(text="Configuración cancelada")
+        return ConversationHandler.END
     else:
         await query.message.reply_text("Opción inválida. Por favor, intenta nuevamente.")
         return SETUP
 
 async def capture_date(update, context):
-    user_input = update.message.text
+    data = json.loads(update.message.web_app_data.data)
 
     try:
-        reminder_date = datetime.datetime.strptime(user_input, "%d/%m").date()
+        reminder_date = datetime.datetime.strptime(data[0], "%Y-%m-%dT%H:%M:%S.%fZ")
+        reminder_date += datetime.timedelta(days=1)
         # Save the reminder_date for later use
         context.user_data['reminder_date'] = reminder_date
-        await update.message.reply_text("Fecha configurada exitosamente.")
+        await update.message.reply_text(f"Fecha configurada exitosamente: {reminder_date.strftime('%d/%m')}")
         if 'annual_amount' in context.user_data:
-            await complete_setup(update, context)  # Proceed to complete setup if both date and amount are available
+            return await complete_setup(update, context)  # Proceed to complete setup if both date and amount are available
         else:
-            await update.message.reply_text("Por favor, envía la cantidad que se debe pagar anualmente:")
-            return CONFIGURING_AMOUNT  # Ask for the amount
+            return await setup(update, context)
     except ValueError:
         await update.message.reply_text("Fecha inválida. Por favor, intenta nuevamente. (Formato: dd/mm)")
+
+
 
 async def capture_amount(update, context):    
     user_input = update.message.text    
     
     try:
-        annual_amount = float(user_input)
+        annual_amount = int(user_input)
         # Save the annual_amount for later use
         context.user_data['annual_amount'] = annual_amount
-        await update.message.reply_text("Cantidad configurada exitosamente.")
+        await update.message.reply_text(f"Cantidad configurada exitosamente: {annual_amount}")
         if 'reminder_date' in context.user_data:
-            await complete_setup(update, context)  # Proceed to complete setup if both date and amount are available
+            return await complete_setup(update, context)  # Proceed to complete setup if both date and amount are available
         else:
-            await update.message.reply_text("Por favor, selecciona la fecha en que se debe pagar anualmente:")
-            return CONFIGURING_DATE  # Ask for the date
+            return await setup(update, context)
     except ValueError:
         await update.message.reply_text("Cantidad inválida. Por favor, intenta nuevamente.")
 
@@ -183,10 +235,15 @@ async def complete_setup(update, context):
     reminder_date = context.user_data['reminder_date']
     annual_amount = context.user_data['annual_amount']
 
+    try:
+        members=pickle.load(open("members.storage","rb"))
+    except (EOFError, FileNotFoundError) as e:
+        members = None
+
     await update.message.reply_text(
         f"Configuración completada.\n\n"
         f"El Cobrador del Frac vendrá a buscaros cada {reminder_date.strftime('%d/%m')} "
-        f"por la siguiente cantidad: {str(int(annual_amount))}€."
+        f"por la siguiente cantidad: {str(annual_amount)}€."
     )
 
     chat_id = update.message.chat_id
@@ -194,7 +251,7 @@ async def complete_setup(update, context):
     current_jobs = context.job_queue.get_jobs_by_name(str(chat_id))
     for job in current_jobs: job.schedule_removal()
     
-    context.job_queue.run_daily(check_date, datetime.time(hour=8, minute=00, tzinfo=pytz.timezone('Europe/Madrid')), chat_id=chat_id, data=(reminder_date,annual_amount), name=str(chat_id))
+    context.job_queue.run_daily(check_date, datetime.time(hour=23, minute=30, tzinfo=pytz.timezone('Europe/Madrid')), chat_id=chat_id, data=(reminder_date,annual_amount,members), name=str(chat_id))
 
     return ConversationHandler.END
 
@@ -203,37 +260,84 @@ async def check_date(context):
     reminder_date = context.job.data[0].strftime('%d/%m')
     annual_amount = context.job.data[1]
 
+    try:
+        members=pickle.load(open("members.storage","rb"))
+    except (EOFError, FileNotFoundError) as e:
+        members = None
+
     if current_date == reminder_date:
-        global members
         members = {558352770:'mtona86', 54997365:'kRowone', 328961319:'mjubany', 27197845:'Collinmcrae', 205924861:'h4ng3r'}
+
+        with open('members.storage', 'wb') as f:
+            pickle.dump(members, f)
+
         await context.bot.send_message(chat_id=context.job.chat_id, text="Ha llegado el dia, morosos!")
     
-
-    for member in members:
-        username = members[member]
-        
-        message = f"[@{username}](tg://user?id={str(member)}): Debes {str(int(annual_amount))}€ a [@anxoveta](tg://user?id=47095626). Paga la coca, primer aviso"
-        await context.bot.send_message(chat_id=context.job.chat_id, text=message, parse_mode="Markdown")
+    if members is not None:
+        for member in members:
+            username = members[member]
+            
+            message = f"[@{username}](tg://user?id={str(member)}): Debes {str(annual_amount)}€ a [@anxoveta](tg://user?id=47095626). Paga la coca, primer aviso"
+            await context.bot.send_message(chat_id=context.job.chat_id, text=message, parse_mode="Markdown")
 
 @restricted
 @send_typing_action(ChatAction.TYPING)
 async def settle(update, context):
+    chat_id = update.effective_chat.id
     # Mark the user as debt-free
-    userid = update.message.from_user['id']
-    username = update.message.from_user['username']
+    if len(context.args) > 0:
+        if len(context.args) > 1:
+            await context.bot.send_message(chat_id=chat_id, 
+                text=f"Solo se puede pasar un usuario como máximo!",
+                parse_mode="Markdown")
+            return
+        else:
+            #Check if admin
+            user_id = update.message.from_user['id']
+            if user_id not in LIST_OF_ADMINS:
+                await context.bot.send_message(chat_id=chat_id, 
+                    text=f"Solo los administradores pueden saldar cuentas de otros miembros.",
+                    parse_mode="Markdown")
+                return
+            # Look for username
+            username = context.args[0]
+            if username[0] == "@":
+                username = username[1:]
+            aux = {'mtona86': 558352770, 'kRowone': 54997365, 'mjubany':328961319, 'Collinmcrae': 27197845, 'h4ng3r':205924861}
+            if username in aux:
+                userid = aux[username]
+            else:
+                await context.bot.send_message(chat_id=chat_id, 
+                    text=f"@{username} no es un miembro válido",
+                    parse_mode="Markdown")
+                return
+    else:
+        userid = update.message.from_user['id']
+        username = update.message.from_user['username']
 
-    global members
-    if userid in members:
-        del members[userid]
+    try:
+        members=pickle.load(open("members.storage","rb"))
+    except (EOFError, FileNotFoundError) as e:
+        members = None
 
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id, 
-            text=f"[@{username}](tg://user?id={str(userid)}) ha sido liberado. Actualiza el [Excel](https://docs.google.com/spreadsheets/d/1y0SWXqF0I2mEOPvtsfjj23dDXEMh76g9JiihlNB7T_Q/edit?usp=drivesdk) Bitch!", 
-            parse_mode="Markdown")
+    if members is not None:
+        if userid in members:
+            del members[userid]
+            with open('members.storage', 'wb') as f:
+                pickle.dump(members, f)
+            await context.bot.send_message(
+                chat_id=chat_id, 
+                text=f"[@{username}](tg://user?id={str(userid)}) ha sido liberado. Actualiza el [Excel](https://docs.google.com/spreadsheets/d/1y0SWXqF0I2mEOPvtsfjj23dDXEMh76g9JiihlNB7T_Q/edit?usp=drivesdk) Bitch!", 
+                parse_mode="Markdown")
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id, 
+                text=f"[@{username}](tg://user?id={str(userid)}) no debe nada, parguela", 
+                parse_mode="Markdown")
     else:
         await context.bot.send_message(
-            chat_id=update.effective_chat.id, 
-            text="Tu no debias nada, parguela", 
+            chat_id=chat_id, 
+            text=f"Nadie debe nada ya, parguela", 
             parse_mode="Markdown")
 
 @restricted
@@ -247,28 +351,37 @@ async def cancel(update, context):
 @admin
 @send_typing_action(ChatAction.TYPING)
 async def reset(update, context):
-    await update.message.reply_text("Configuración eliminada.")
-    return ConversationHandler.END
+    reminder_date = context.user_data['reminder_date']
+    annual_amount = context.user_data['annual_amount']
+
+    if reminder_date or annual_amount:
+        del context.user_data['reminder_date']
+        del context.user_data['annual_amount']
+        await update.message.reply_text("Configuración eliminada.")
+    else:
+        await update.message.reply_text("El chat aún no ha sido configurado")
 
 
 if __name__ == '__main__':
-    app = ApplicationBuilder().token(TOKEN).build()
+    persistence = PicklePersistence(filepath="session.storage")
+    app = ApplicationBuilder().token(TOKEN).persistence(persistence).build()
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("settle", settle))
     app.add_handler(CommandHandler("reset", reset))
-    
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("setup", setup)],
         states={
             SETUP: [CallbackQueryHandler(configure_option)],
-            CONFIGURING_DATE: [MessageHandler(filters.TEXT & (~filters.COMMAND), capture_date)],
+            CONFIGURING_DATE: [MessageHandler(filters.StatusUpdate.WEB_APP_DATA & (~filters.COMMAND), capture_date)],
             CONFIGURING_AMOUNT: [MessageHandler(filters.TEXT & (~filters.COMMAND), capture_amount)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
+        name="config",
+        persistent=True,
     )
     app.add_handler(conv_handler)
     
