@@ -131,7 +131,7 @@ async def complete_setup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.message.reply_text(
         f"Configuración completada.\n\n"
         f"El Cobrador del Frac vendrá a buscaros cada {reminder_date.strftime('%d/%m')} "
-        f"por la siguiente cantidad: {annual_amount}€."
+        f"por la siguiente cantidad: {str(int(annual_amount))}€."
     )
 
     chat_id = update.message.chat_id
