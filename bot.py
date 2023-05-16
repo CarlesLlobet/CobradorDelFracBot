@@ -6,7 +6,6 @@ import json
 import pickle
 from urllib.parse import quote
 from functools import wraps
-from telegram_bot_calendar import DetailedTelegramCalendar, LSTEP
 from telegram import Update, KeyboardButton, WebAppInfo, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.constants import ChatAction
 from telegram.ext import (
@@ -91,7 +90,7 @@ async def start(update, context):
 async def status(update, context):
     try:
         members=pickle.load(open("members.storage","rb"))
-    except (EOFError, FileNotFoundError) as e:
+    except (EOFError, FileNotFoundError):
         members = None
 
     if members is not None:
@@ -237,7 +236,7 @@ async def complete_setup(update, context):
 
     try:
         members=pickle.load(open("members.storage","rb"))
-    except (EOFError, FileNotFoundError) as e:
+    except (EOFError, FileNotFoundError):
         members = None
 
     await update.message.reply_text(
@@ -262,7 +261,7 @@ async def check_date(context):
 
     try:
         members=pickle.load(open("members.storage","rb"))
-    except (EOFError, FileNotFoundError) as e:
+    except (EOFError, FileNotFoundError):
         members = None
 
     if current_date == reminder_date:
@@ -317,7 +316,7 @@ async def settle(update, context):
 
     try:
         members=pickle.load(open("members.storage","rb"))
-    except (EOFError, FileNotFoundError) as e:
+    except (EOFError, FileNotFoundError):
         members = None
 
     if members is not None:
