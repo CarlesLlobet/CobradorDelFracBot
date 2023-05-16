@@ -5,6 +5,7 @@ import pytz
 import json
 from functools import wraps
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram.constants import ChatAction
 from telegram.ext import (
     ApplicationBuilder, 
     CommandHandler, 
@@ -54,6 +55,18 @@ def restricted(func):
         return await func(update, context, *args, **kwargs)
     return wrapped
 
+def send_typing_action(action):
+    """Sends the `Typing... action` while processing func command."""
+
+    def decorator(func):
+        @wraps(func)
+        async def command_func(update, context, *args, **kwargs):
+            await context.bot.send_chat_action(chat_id=update.effective_message.chat_id, action=action)
+            return await func(update, context,  *args, **kwargs)
+        return command_func
+    
+    return decorator
+
 members = {}
 
 logging.basicConfig(
@@ -61,6 +74,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 
+@send_typing_action(ChatAction.TYPING)
 @restricted
 async def start(update, context):
     await context.bot.send_message(
@@ -71,6 +85,7 @@ async def start(update, context):
     )
 
 @restricted
+@send_typing_action(ChatAction.TYPING)
 async def status(update, context):
     if 'annual_amount' in context.user_data and 'reminder_date' in context.user_data:
         reminder_date = context.user_data['reminder_date']
@@ -88,6 +103,7 @@ async def status(update, context):
         )
 
 @restricted
+@send_typing_action(ChatAction.TYPING)
 async def help_command(update, context):
     await context.bot.send_message(
     	chat_id=update.effective_chat.id, 
@@ -100,6 +116,7 @@ async def help_command(update, context):
 
 @restricted
 @admin
+@send_typing_action(ChatAction.TYPING)
 async def setup(update, context):
     reply_keyboard = [
         [
@@ -121,7 +138,7 @@ async def configure_option(update, context):
     await query.answer()
     
     if option == 'date':
-        await query.message.reply_text("Por favor, selecciona la fecha en que se debe pagar anualmente:")
+        await query.message.reply_text("Por favor, selecciona la fecha en que se debe pagar anualmente:")     
         return CONFIGURING_DATE
     elif option == 'amount':
         await query.message.reply_text("Por favor, envía la cantidad que se debe pagar anualmente:")
@@ -199,6 +216,7 @@ async def check_date(context):
         await context.bot.send_message(chat_id=context.job.chat_id, text=message, parse_mode="Markdown")
 
 @restricted
+@send_typing_action(ChatAction.TYPING)
 async def settle(update, context):
     # Mark the user as debt-free
     userid = update.message.from_user['id']
@@ -220,14 +238,29 @@ async def settle(update, context):
 
 @restricted
 @admin
+@send_typing_action(ChatAction.TYPING)
 async def cancel(update, context):
     await update.message.reply_text("Configuración cancelada.")
+    return ConversationHandler.END
+
+@restricted
+@admin
+@send_typing_action(ChatAction.TYPING)
+async def reset(update, context):
+    await update.message.reply_text("Configuración eliminada.")
     return ConversationHandler.END
 
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
     
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("status", status))
+    app.add_handler(CommandHandler("settle", settle))
+    app.add_handler(CommandHandler("reset", reset))
+    
+
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("setup", setup)],
         states={
@@ -238,10 +271,5 @@ if __name__ == '__main__':
         fallbacks=[CommandHandler("cancel", cancel)],
     )
     app.add_handler(conv_handler)
-    
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("status", status))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("settle", settle))
     
     app.run_polling()
