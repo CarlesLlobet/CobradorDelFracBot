@@ -10,7 +10,8 @@ Simple dockerized python Telegram Bot to remind your colleagues to pay their deb
 
 ### Telegram Bot creation
 
-The only configuration required in order to get started is to create a .env file with your Telegram Token (`TELEGRAM_TOKEN`).
+The only configuration required in order to get started is to create a .env file with your Telegram Bot Token (`TELEGRAM_TOKEN`), the Chat IDs where you intend to use it (`TELEGRAM_CHATS`), and the User IDs you want to set as Admins for your new Bot, to access configuration functions (`TELEGRAM_ADMINS`).
+For the last two configuration variables, even if there's just one ID, make sure to pass them as arrays.
 
 If you don't have a Telegram Token yet, you'll need one through Telegram's BotFather.
 See details on Bot creation [here](https://core.telegram.org/bots/features#botfather).
@@ -19,7 +20,9 @@ See details on Bot creation [here](https://core.telegram.org/bots/features#botfa
 
 Now that we have a Telegram Token for our bot, the configuration is as easy as:
 ```
-$ echo "TELEGRAM_TOKEN=0123456789:AbCd1e2f3G..." > .env
+$ echo "TELEGRAM_TOKEN=0123456789:AbCd1e2f3G..." >> .env
+$ echo "TELEGRAM_CHATS=[1111,2222]" >> .env
+$ echo "TELEGRAM_ADMINS=[3333]" >> .env
 ```
 
 ### Usage

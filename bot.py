@@ -2,6 +2,8 @@ import os
 import logging
 import datetime
 import pytz
+import json
+from functools import wraps
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     ApplicationBuilder, 
@@ -21,6 +23,37 @@ filterwarnings(action="ignore", message=r".*CallbackQueryHandler", category=PTBU
 TOKEN = str(os.environ.get('TELEGRAM_TOKEN'))
 SETUP, CONFIGURING_DATE, CONFIGURING_AMOUNT = range(3)
 
+LIST_OF_ADMINS = json.loads(os.environ.get('TELEGRAM_ADMINS','[54997365]')) # @kRowone9
+def admin(func):
+    @wraps(func)
+    async def wrapped(update, context, *args, **kwargs):
+        chat_id = update.effective_chat.id
+        user_id = update.message.from_user['id']
+        username = update.message.from_user['username']
+        if user_id not in LIST_OF_ADMINS:
+            await context.bot.send_message(chat_id=chat_id, 
+                text=f"No tienes permisos de administrador para este bot, [@{username}](tg://user?id={str(user_id)}).",
+                parse_mode="Markdown")
+            return
+        return await func(update, context, *args, **kwargs)
+    return wrapped
+
+LIST_OF_CHATS = json.loads(os.environ.get('TELEGRAM_CHATS', '[-366683659, -346416650]')) # Spotify Family & Naturcenter
+def restricted(func):
+    @wraps(func)
+    async def wrapped(update, context, *args, **kwargs):
+        chat_id = update.effective_chat.id
+        user_id = update.message.from_user['id']
+        if chat_id not in LIST_OF_CHATS:
+            if user_id not in LIST_OF_ADMINS:
+                await context.bot.send_message(chat_id=chat_id, 
+                    text=f"Este bot solo funciona en ciertos chats para optimizar recursos.\n\n"
+                    "Si quieres usar este bot en tus propios chats, despliega tu propia instancia:\n"
+                    "[Github - CobradorDelFracBot](https://github.com/CarlesLlobet/CobradorDelFracBot/)")
+                return
+        return await func(update, context, *args, **kwargs)
+    return wrapped
+
 members = {}
 
 logging.basicConfig(
@@ -28,7 +61,8 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+@restricted
+async def start(update, context):
     await context.bot.send_message(
     	chat_id=update.effective_chat.id, 
     	text="Buenas! Soy el Cobrador del Frac!\n\n"
@@ -36,7 +70,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     	"Puedes llamar a /setup para empezar la configuración, o /help para ver todos los comandos disponibles."
     )
 
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+@restricted
+async def status(update, context):
     if 'annual_amount' in context.user_data and 'reminder_date' in context.user_data:
         reminder_date = context.user_data['reminder_date']
         annual_amount = context.user_data['annual_amount']
@@ -52,7 +87,8 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text="El chat aun no ha sido configurado"
         )
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+@restricted
+async def help_command(update, context):
     await context.bot.send_message(
     	chat_id=update.effective_chat.id, 
     	text="Aquí tienes los comandos disponibles:\n\n"
@@ -62,7 +98,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/settle - Una vez pagado, librate de mas insultos marcandote como pagado con este comando"
     )
 
-async def setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+@restricted
+@admin
+async def setup(update, context):
     reply_keyboard = [
         [
             InlineKeyboardButton("Enviar fecha", callback_data='date'),
@@ -77,7 +115,7 @@ async def setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return SETUP
 
-async def configure_option(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def configure_option(update, context):
     query = update.callback_query
     option = query.data
     await query.answer()
@@ -92,7 +130,7 @@ async def configure_option(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.message.reply_text("Opción inválida. Por favor, intenta nuevamente.")
         return SETUP
 
-async def capture_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def capture_date(update, context):
     user_input = update.message.text
 
     try:
@@ -108,7 +146,7 @@ async def capture_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except ValueError:
         await update.message.reply_text("Fecha inválida. Por favor, intenta nuevamente. (Formato: dd/mm)")
 
-async def capture_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:    
+async def capture_amount(update, context):    
     user_input = update.message.text    
     
     try:
@@ -124,7 +162,7 @@ async def capture_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except ValueError:
         await update.message.reply_text("Cantidad inválida. Por favor, intenta nuevamente.")
 
-async def complete_setup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def complete_setup(update, context):
     reminder_date = context.user_data['reminder_date']
     annual_amount = context.user_data['annual_amount']
 
@@ -143,25 +181,25 @@ async def complete_setup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     return ConversationHandler.END
 
-async def check_date(context: ContextTypes.DEFAULT_TYPE) -> None:
+async def check_date(context):
     current_date = datetime.datetime.now(pytz.timezone('Europe/Madrid')).strftime("%d/%m")
     reminder_date = context.job.data[0].strftime('%d/%m')
     annual_amount = context.job.data[1]
 
     if current_date == reminder_date:
         global members
-        members = {558352770:'@mtona86', 54997365:'@kRowone', 328961319:'@mjubany', 27197845:'@Collinmcrae', 205924861:'@h4ng3r'}
+        members = {558352770:'mtona86', 54997365:'kRowone', 328961319:'mjubany', 27197845:'Collinmcrae', 205924861:'h4ng3r'}
         await context.bot.send_message(chat_id=context.job.chat_id, text="Ha llegado el dia, morosos!")
     
 
     for member in members:
         username = members[member]
         
-        message = "["+username+"](tg://user?id="+str(member)+"): Debes "+str(int(annual_amount))+"€ a [@anxoveta](tg://user?id=47095626). Paga la coca, primer aviso"
+        message = f"[@{username}](tg://user?id={str(member)}): Debes {str(int(annual_amount))}€ a [@anxoveta](tg://user?id=47095626). Paga la coca, primer aviso"
         await context.bot.send_message(chat_id=context.job.chat_id, text=message, parse_mode="Markdown")
 
-
-async def settle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+@restricted
+async def settle(update, context):
     # Mark the user as debt-free
     userid = update.message.from_user['id']
     username = update.message.from_user['username']
@@ -172,7 +210,7 @@ async def settle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         await context.bot.send_message(
             chat_id=update.effective_chat.id, 
-            text="["+username+"](tg://user?id="+str(userid)+") ha sido liberado. Actualiza el [Excel](https://docs.google.com/spreadsheets/d/1y0SWXqF0I2mEOPvtsfjj23dDXEMh76g9JiihlNB7T_Q/edit?usp=drivesdk) Bitch!", 
+            text=f"[@{username}](tg://user?id={str(userid)}) ha sido liberado. Actualiza el [Excel](https://docs.google.com/spreadsheets/d/1y0SWXqF0I2mEOPvtsfjj23dDXEMh76g9JiihlNB7T_Q/edit?usp=drivesdk) Bitch!", 
             parse_mode="Markdown")
     else:
         await context.bot.send_message(
@@ -180,8 +218,9 @@ async def settle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             text="Tu no debias nada, parguela", 
             parse_mode="Markdown")
 
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+@restricted
+@admin
+async def cancel(update, context):
     await update.message.reply_text("Configuración cancelada.")
     return ConversationHandler.END
 

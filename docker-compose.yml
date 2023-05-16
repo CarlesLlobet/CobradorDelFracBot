@@ -8,6 +8,8 @@ services:
       context: "."
     environment:
       - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - TELEGRAM_ADMINS=${TELEGRAM_ADMINS:-[54997365]}
+      - TELEGRAM_CHATS=${TELEGRAM_CHATS:-[-366683659, -346416650]}
     volumes:
       - /etc/localtime:/etc/localtime:ro
     
